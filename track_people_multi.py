@@ -47,7 +47,8 @@ while True:
         for box in results.boxes:
             cls = int(box.cls[0])
             conf = float(box.conf[0])
-            if model.names[cls] == "person" and conf > 0.4:
+            # if model.names[cls] == "person" and conf > 0.4:
+            if model.names[cls] == "person" and conf > 0.5: #This helps reduce false positives.
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 detections.append(([x1, y1, x2 - x1, y2 - y1], conf, 'person'))
 

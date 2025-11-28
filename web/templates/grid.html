@@ -1,0 +1,191 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Multi-Cam Grid</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 12px; }
+    .controls { margin-bottom: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(2, 640px); gap: 8px; }
+    .cam-box { position: relative; width: 640px; height: 360px; background: #000; }
+    video { width: 640px; height: 360px; display: block; }
+    canvas.overlay {
+      position: absolute; left: 0; top: 0; pointer-events: none;
+    }
+    .cam-title { margin: 6px 0 4px; font-weight: bold; }
+    .controls > * { margin-right: 8px; vertical-align: middle; }
+    #fpsInput { width: 60px; } #windowSec { width: 60px; } #timebox { width: 80px; }
+  </style>
+</head>
+<body>
+  <h2>Multi-Camera Grid</h2>
+
+  <div class="controls">
+    <button id="playBtn">Play</button>
+    <button id="pauseBtn">Pause</button>
+    Time (sec): <input type="range" id="frameRange" min="0" max="60" value="0" style="width:420px" />
+    <span id="frameLabel">0.0</span>
+    &nbsp;|&nbsp; FPS: <input id="fpsInput" type="number" value="25" min="1" step="1" />
+    &nbsp;|&nbsp; <button id="reloadTracks">Reload tracks</button>
+  </div>
+
+  <div class="grid" id="grid">
+    {% for v in videos %}
+      <div>
+        <div class="cam-title">Camera {{ v.cam_id }}</div>
+        <div class="cam-box" data-cam="{{ v.cam_id }}">
+          <video id="video{{ v.cam_id }}" width="640" height="360" controls preload="metadata">
+            <source src="/video/{{ v.cam_id }}" type="video/mp4">
+            Your browser does not support the video tag.
+          </video>
+          <canvas id="canvas{{ v.cam_id }}" class="overlay" width="640" height="360"></canvas>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+<script>
+(() => {
+  const videos = Array.from(document.querySelectorAll('video'));
+  const fpsInput = document.getElementById('fpsInput');
+  const slider = document.getElementById('frameRange');
+  const frameLabel = document.getElementById('frameLabel');
+  const playBtn = document.getElementById('playBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const reloadBtn = document.getElementById('reloadTracks');
+
+  const cams = {};
+  videos.forEach(v => {
+    const camId = v.id.replace('video','');
+    const canvas = document.getElementById('canvas' + camId);
+    const ctx = canvas.getContext('2d');
+    cams[camId] = { video: v, canvas, ctx, naturalWidth: 640, naturalHeight: 360 };
+    v.addEventListener('loadedmetadata', () => {
+      const w = v.videoWidth || 640;
+      const h = v.videoHeight || 360;
+      cams[camId].naturalWidth = w;
+      cams[camId].naturalHeight = h;
+      canvas.width = v.clientWidth;
+      canvas.height = v.clientHeight;
+    });
+  });
+
+  // Fetch tracks for given frames (frame indices)
+  async function fetchTracksFrames(frameFrom, frameTo) {
+    const camIds = Object.keys(cams).join(',');
+    const url = `/api/tracks?cams=${camIds}&from=${frameFrom}&to=${frameTo}&unit=frames`;
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        console.warn('tracks API', resp.status, await resp.text());
+        return [];
+      }
+      return await resp.json();
+    } catch (e) {
+      console.error('fetchTracks error', e);
+      return [];
+    }
+  }
+
+  function deterministicColor(id) {
+    const seed = typeof id === 'number' ? id : parseInt(String(id).replace(/\D/g,'')) || 0;
+    const r = (seed * 97) % 255;
+    const g = (seed * 193) % 255;
+    const b = (seed * 53) % 255;
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function drawForCam(camId, rows) {
+    const info = cams[camId];
+    const ctx = info.ctx;
+    const v = info.video;
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+
+    const scaleX = ctx.canvas.width / info.naturalWidth;
+    const scaleY = ctx.canvas.height / info.naturalHeight;
+
+    rows.forEach(r => {
+      if (String(r.cam_id) !== String(camId)) return;
+      const x1 = r.x1 * scaleX;
+      const y1 = r.y1 * scaleY;
+      const x2 = r.x2 * scaleX;
+      const y2 = r.y2 * scaleY;
+      const w = Math.max(2, x2 - x1), h = Math.max(2, y2 - y1);
+      const gid = (r.global_id === null) ? r.local_id : r.global_id;
+      const color = deterministicColor(gid);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.95;
+      ctx.strokeRect(x1, y1, w, h);
+
+      const label = `G:${r.global_id ?? '-'} L:${r.local_id}`;
+      ctx.font = "14px Arial";
+      const textW = ctx.measureText(label).width;
+      const pad = 4;
+      ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.max(0, y1 - 20), textW + pad*2, 18);
+      ctx.fillStyle = '#000';
+      ctx.fillText(label, x1 + pad, Math.max(12, y1 - 6));
+    });
+  }
+
+  // Update overlays for the current slider second by fetching the corresponding frame
+  let latestRows = [];
+  async function updateOverlays() {
+    const t = parseFloat(slider.value);
+    const fps = parseFloat(fpsInput.value) || 25;
+    const frameIdx = Math.round(t * fps);
+    latestRows = await fetchTracksFrames(frameIdx, frameIdx);
+    Object.keys(cams).forEach(camId => drawForCam(camId, latestRows));
+  }
+
+  slider.addEventListener('input', async (e) => {
+    const sec = parseFloat(e.target.value);
+    frameLabel.innerText = sec.toFixed(2);
+    Object.values(cams).forEach(info => { try { info.video.currentTime = sec; info.video.pause(); } catch(e){} });
+    await updateOverlays();
+  });
+
+  playBtn.addEventListener('click', () => {
+    Object.values(cams).forEach(info => { info.video.play().catch(()=>{}); });
+    playing = true;
+    requestAnimationFrame(syncSliderWithVideo);
+  });
+  pauseBtn.addEventListener('click', () => {
+    Object.values(cams).forEach(info => info.video.pause());
+    playing = false;
+  });
+  reloadBtn.addEventListener('click', updateOverlays);
+
+  let playing = false;
+  function syncSliderWithVideo() {
+    if (!playing) return;
+    const times = Object.values(cams).map(info => info.video.currentTime || 0);
+    const minT = Math.min(...times);
+    slider.value = minT;
+    frameLabel.innerText = minT.toFixed(2);
+    updateOverlays();
+    requestAnimationFrame(syncSliderWithVideo);
+  }
+
+  async function init() {
+    let maxDur = 0;
+    for (const id of Object.keys(cams)) {
+      const v = cams[id].video;
+      if (!v.duration || isNaN(v.duration) || v.duration === Infinity) {
+        await new Promise(resolve => v.addEventListener('loadedmetadata', resolve, {once:true}));
+      }
+      maxDur = Math.max(maxDur, v.duration || 0);
+    }
+    slider.max = Math.max(1, Math.floor(maxDur));
+    slider.step = 0.04;
+    frameLabel.innerText = parseFloat(slider.value).toFixed(2);
+    updateOverlays();
+  }
+
+  init().catch(err => console.error("Init error:", err));
+})();
+</script>
+</body>
+</html>

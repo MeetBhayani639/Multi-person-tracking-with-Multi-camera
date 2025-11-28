@@ -1,38 +1,25 @@
-@"
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Virtual Environments
+# Virtual environment
 venv/
 env/
-.venv/
 
-# Torch, CV and large binaries
-*.dll
-*.pyd
-*.so
-*.dylib
-
-# Model weights
-*.pt
-*.pth
-*.onnx
-*.tflite
-
-# Videos / Outputs
-outputs/
-*.mp4
-*.avi
-*.mov
-
-# OS Cache
+# OS crap
 .DS_Store
 Thumbs.db
+
+# Local videos (DO NOT PUSH LARGE FILES)
+input_videos/
+outputs/
+
+# Ultralytics cache
+*.pt
+runs/
 
 # IDE
 .vscode/
 .idea/
-"@ | Out-File -FilePath .gitignore -Encoding utf8
